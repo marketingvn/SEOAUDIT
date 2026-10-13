@@ -7,7 +7,7 @@ import urllib.error
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parent
 USER_AGENT = "AnPhuocSEOAudit/1.0 (+https://anphuocrealty.vn)"
@@ -82,6 +82,30 @@ def parse_html(html):
         pass
     return parser
 
+def normalized_url(value):
+    """Normalize only URL formatting, not distinct slugs or file extensions."""
+    try:
+        parts = urlsplit(value)
+        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(),
+                          parts.path.rstrip("/") or "/", "", ""))
+    except Exception:
+        return value
+
+def render_markdown(pages, backlinks):
+    lines = ["# Báo cáo SEO An Phước Realty", "",
+             "Báo cáo máy tự động; cần kiểm chứng các cảnh báo trước khi sửa website.", "",
+             "## Các URL cần xử lý", ""]
+    flagged = [p for p in pages if p["issues"]]
+    if not flagged:
+        lines.append("Không phát hiện vấn đề theo bộ tiêu chí hiện tại.")
+    for p in flagged:
+        lines.extend([f"### {p['url']}", f"- HTTP: {p['status']}",
+                      f"- Vấn đề: {p['issues']}", ""])
+    lines.extend(["## Backlink", "",
+                  f"Đã kiểm tra {len(backlinks)} backlink được khai báo. "
+                  "Danh sách trống không có nghĩa website không có backlink.", ""])
+    return "\\n".join(lines)
+
 def main():
     reports = ROOT / "reports"
     reports.mkdir(exist_ok=True)
@@ -143,7 +167,7 @@ def main():
         "backlinks_found": sum(row["link_found"] for row in backlinks),
     }
     (reports / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    (reports / "seo_findings.md").write_text(render_markdown(pages, backlinks), encoding="utf-8")\n    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()
