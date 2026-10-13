@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Validate Python syntax
+        run: python -m py_compile seo_monitor.py
       - name: Run SEO audit
         run: python seo_monitor.py
       - name: Upload reports
