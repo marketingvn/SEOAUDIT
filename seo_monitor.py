@@ -104,7 +104,7 @@ def render_markdown(pages, backlinks):
     lines.extend(["## Backlink", "",
                   f"Đã kiểm tra {len(backlinks)} backlink được khai báo. "
                   "Danh sách trống không có nghĩa website không có backlink.", ""])
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 def main():
     reports = ROOT / "reports"
@@ -128,9 +128,11 @@ def main():
             if not parser.h1:
                 issues.append("Missing H1")
             if "đang tải bài viết" in html.lower():
-                issues.append("Potential JS-only article")
+                issues.append("JS loading placeholder in HTML; verify rendered content")
             if "không tìm thấy bài viết" in html.lower():
-                issues.append("Soft 404 candidate")
+                issues.append("Not-found phrase in HTML; verify visibility before treating as soft 404")
+            if parser.canonical and normalized_url(urljoin(final_url, parser.canonical)) != normalized_url(final_url):
+                issues.append("Canonical differs from requested URL; verify intended canonical")
             if "noindex" in parser.robots.lower():
                 issues.append("Noindex")
         pages.append({
