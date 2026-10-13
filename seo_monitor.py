@@ -2,6 +2,9 @@
 """Read-only technical SEO and known-backlink audit for An Phuoc Realty."""
 import csv
 import json
+import os
+import time
+import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -106,14 +109,72 @@ def render_markdown(pages, backlinks):
                   "Danh sách trống không có nghĩa website không có backlink.", ""])
     return "\n".join(lines)
 
+def discover_sitemap_urls(domain, limit=150):
+    """Find same-host HTML URLs in sitemap indexes and urlsets."""
+    origin = f"https://{domain}"
+    queue = [origin + "/sitemap.xml", origin + "/wp-sitemap.xml"]
+    seen_maps = set()
+    found = []
+    found_set = set()
+    errors = []
+    while queue and len(seen_maps) < 20 and len(found) < limit:
+        sitemap = queue.pop(0)
+        if sitemap in seen_maps or urlparse(sitemap).netloc != domain:
+            continue
+        seen_maps.add(sitemap)
+        status, _, body, error = fetch(sitemap)
+        if status != 200:
+            errors.append(f"{sitemap}: HTTP {status or error}")
+            continue
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError:
+            errors.append(f"{sitemap}: invalid XML")
+            continue
+        tag = root.tag.rsplit("}", 1)[-1].lower()
+        if tag == "sitemapindex":
+            for item in root:
+                if item.tag.rsplit("}", 1)[-1].lower() != "sitemap":
+                    continue
+                loc = next((node.text.strip() for node in item
+                            if node.tag.rsplit("}", 1)[-1].lower() == "loc" and node.text), "")
+                if loc and urlparse(loc).netloc == domain and loc not in seen_maps:
+                    queue.append(loc)
+        elif tag == "urlset":
+            for item in root:
+                if item.tag.rsplit("}", 1)[-1].lower() != "url":
+                    continue
+                loc = next((node.text.strip() for node in item
+                            if node.tag.rsplit("}", 1)[-1].lower() == "loc" and node.text), "")
+                if not loc:
+                    continue
+                parsed = urlparse(loc)
+                if parsed.scheme not in ("https", "http") or parsed.netloc != domain:
+                    continue
+                if parsed.path.lower().endswith((".jpg", ".png", ".jpeg", ".webp", ".gif", ".pdf", ".xml")):
+                    continue
+                if loc not in found_set:
+                    found_set.add(loc)
+                    found.append(loc)
+                    if len(found) >= limit:
+                        break
+        else:
+            errors.append(f"{sitemap}: unsupported XML root {tag}")
+    return found, errors, len(seen_maps)
+
 def main():
     reports = ROOT / "reports"
     reports.mkdir(exist_ok=True)
     targets = [row["url"].strip() for row in read_csv(ROOT / "data" / "target_urls.csv") if row.get("url", "").strip()]
     domain = urlparse(targets[0]).netloc if targets else "anphuocrealty.vn"
+    max_pages = max(1, min(int(os.getenv("SEO_MAX_PAGES", "150")), 500))
+    sitemap_urls, sitemap_errors, sitemaps_scanned = discover_sitemap_urls(domain, limit=max_pages)
+    targets = list(dict.fromkeys(targets + sitemap_urls))[:max_pages]
     targets.extend([f"https://{domain}/robots.txt", f"https://{domain}/sitemap.xml"])
+    print(f"Discovered {len(sitemap_urls)} URLs in {sitemaps_scanned} sitemaps; errors: {len(sitemap_errors)}")
     pages = []
     for url in dict.fromkeys(targets):
+        time.sleep(0.15)
         status, final_url, html, error = fetch(url)
         is_resource = urlparse(url).path.endswith((".txt", ".xml"))
         parser = parse_html(html) if html and not is_resource else PageParser()
@@ -164,12 +225,17 @@ def main():
     summary = {
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
         "pages_checked": len(pages),
+        "sitemap_urls_found": len(sitemap_urls),
+        "sitemaps_scanned": sitemaps_scanned,
+        "sitemap_errors": sitemap_errors,
+        "page_limit": max_pages,
         "pages_with_issues": sum(bool(page["issues"]) for page in pages),
         "backlinks_checked": len(backlinks),
         "backlinks_found": sum(row["link_found"] for row in backlinks),
     }
     (reports / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    (reports / "seo_findings.md").write_text(render_markdown(pages, backlinks), encoding="utf-8")\n    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    (reports / "seo_findings.md").write_text(render_markdown(pages, backlinks), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()
